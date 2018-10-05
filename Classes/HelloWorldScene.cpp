@@ -1,5 +1,5 @@
 #include "HelloWorldScene.h"
-
+#include "GameOverLayer.h"
 
 CCScene* HelloWorld::scene()
 {
@@ -122,12 +122,54 @@ bool HelloWorld::init()
 	jointDef.Initialize(_paddleBody, _groundBody,
 		_paddleBody->GetWorldCenter(), worldAxis);
 	_world->CreateJoint(&jointDef);
+
+
+	// Create contact listener
+	_contactListener = new MyContactListener();
+	_world->SetContactListener(_contactListener);
+
+
+	for (int i = 0; i < 4; i++) {
+
+		static int padding = 20;
+
+		// Create block and add it to the layer
+		CCSprite *block = CCSprite::create("block.png");
+		int xOffset = padding + block->getContentSize().width / 2 +
+			((block->getContentSize().width + padding)*i);
+		block->setPosition(ccp(xOffset, 250));
+		block->setTag(2);
+		this->addChild(block);
+
+		// Create block body
+		b2BodyDef blockBodyDef;
+		blockBodyDef.type = b2_dynamicBody;
+		blockBodyDef.position.Set(xOffset / PTM_RATIO, 250 / PTM_RATIO);
+		blockBodyDef.userData = block;
+		b2Body *blockBody = _world->CreateBody(&blockBodyDef);
+
+		// Create block shape
+		b2PolygonShape blockShape;
+		blockShape.SetAsBox(block->getContentSize().width / PTM_RATIO / 2,
+			block->getContentSize().height / PTM_RATIO / 2);
+
+		// Create shape definition and add to body
+		b2FixtureDef blockShapeDef;
+		blockShapeDef.shape = &blockShape;
+		blockShapeDef.density = 10.0;
+		blockShapeDef.friction = 0.0;
+		blockShapeDef.restitution = 0.1f;
+		blockBody->CreateFixture(&blockShapeDef);
+
+	}
+
     return true;
 }
 
 
 
 void HelloWorld::tick(float dt){
+	bool blockFound = false;
 	_world->Step(dt, 10, 10);
 	for (b2Body *b = _world->GetBodyList(); b; b = b->GetNext()) {
 		if (b->GetUserData() != NULL) {
@@ -149,16 +191,73 @@ void HelloWorld::tick(float dt){
 					b->SetLinearDamping(0.0);
 				}
 			}
+			else if (sprite->getTag() == 2) {
+				blockFound = true;
+			}
 		}
 	}
+
+
+	//check contacts
+	std::vector<b2Body *>toDestroy;
+	std::vector<MyContact>::iterator pos;
+	for (pos = _contactListener->_contacts.begin();
+		pos != _contactListener->_contacts.end(); ++pos) {
+		MyContact contact = *pos;
+
+		if ((contact.fixtureA == _bottomFixture && contact.fixtureB == _ballFixture) ||
+			(contact.fixtureA == _ballFixture && contact.fixtureB == _bottomFixture)) {
+
+			CCLOG("Ball hit bottom!");
+			CCScene *gameOverScene = GameOverLayer::scene(false);
+			CCDirector::sharedDirector()->replaceScene(gameOverScene);
+		}
+
+			b2Body *bodyA = contact.fixtureA->GetBody();
+			b2Body *bodyB = contact.fixtureB->GetBody();
+			if (bodyA->GetUserData() != NULL && bodyB->GetUserData() != NULL) {
+				CCSprite *spriteA = (CCSprite *)bodyA->GetUserData();
+				CCSprite *spriteB = (CCSprite *)bodyB->GetUserData();
+
+				//Sprite A = ball, Sprite B = Block
+				if (spriteA->getTag() == 1 && spriteB->getTag() == 2) {
+					if (std::find(toDestroy.begin(), toDestroy.end(), bodyB) == toDestroy.end()) {
+						toDestroy.push_back(bodyB);
+					}
+				}
+
+				//Sprite A = block, Sprite B = ball
+				else if (spriteA->getTag() == 2 && spriteB->getTag() == 1) {
+					if (std::find(toDestroy.begin(), toDestroy.end(), bodyA) == toDestroy.end()) {
+						toDestroy.push_back(bodyA);
+					}
+				}
+			}
+		}
+
+		std::vector<b2Body *>::iterator pos2;
+		for (pos2 = toDestroy.begin(); pos2 != toDestroy.end(); ++pos2) {
+			b2Body *body = *pos2;
+			if (body->GetUserData() != NULL) {
+				CCSprite *sprite = (CCSprite *)body->GetUserData();
+				this->removeChild(sprite,true);
+			}
+			_world->DestroyBody(body);
+		}
+
+		if (!blockFound) {
+			CCLOG("Win!..");
+			CCScene *gameOverScene = GameOverLayer::scene(true);
+			CCDirector::sharedDirector()->replaceScene(gameOverScene);
+		}
 }
 
 HelloWorld::~HelloWorld()
 {
-	/*CC_SAFE_DELETE( _world);
-	_groundBody = NULL;*/
+	CC_SAFE_DELETE( _world);
+	_groundBody = NULL;
+	CC_SAFE_DELETE(_contactListener);
 }
-
 
 void HelloWorld::ccTouchesBegan(CCSet* pTouches, CCEvent* event)
 {
